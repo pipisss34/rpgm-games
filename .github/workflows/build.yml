@@ -1,0 +1,95 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      game_url:
+        description: 'Opsional: URL langsung ke file .zip game (menggantikan isi folder game/)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install SDK platform + build-tools
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Ambil game dari URL (opsional)
+        if: ${{ github.event.inputs.game_url != '' }}
+        env:
+          GAME_URL: ${{ github.event.inputs.game_url }}
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o "$RUNNER_TEMP/game.zip" "$GAME_URL"
+          rm -rf game
+          mkdir game
+          unzip -q "$RUNNER_TEMP/game.zip" -d game
+
+      - name: Siapkan game, icon, splash
+        run: |
+          set -euo pipefail
+          test -f icon.png   || { echo "::error::icon.png tidak ada di root repo"; exit 1; }
+          test -f splash.png || { echo "::error::splash.png tidak ada di root repo"; exit 1; }
+
+          # cari folder yang berisi index.html (paling dangkal) -> mendukung MV (www/) dan MZ (flat)
+          ROOT=$(find game -name index.html -not -path '*/node_modules/*' -printf '%d %h\n' | sort -n | head -n1 | cut -d' ' -f2-)
+          if [ -z "$ROOT" ]; then
+            echo "::error::index.html tidak ditemukan di folder game/"
+            exit 1
+          fi
+          echo "Root game: $ROOT"
+
+          rm -rf app/src/main/assets/www
+          mkdir -p app/src/main/assets/www
+          # buang file runtime NW.js yang tidak berguna di Android
+          rsync -a \
+            --exclude 'node_modules' --exclude '.git' \
+            --exclude '*.exe' --exclude '*.dll' --exclude '*.pak' \
+            --exclude '/locales' --exclude '/swiftshader' \
+            --exclude '/icudtl.dat' --exclude '/natives_blob.bin' \
+            --exclude '/snapshot_blob.bin' --exclude '/v8_context_snapshot.bin' \
+            "$ROOT"/ app/src/main/assets/www/
+          du -sh app/src/main/assets/www
+
+          mkdir -p app/src/main/res/mipmap-nodpi app/src/main/res/drawable-nodpi
+          cp icon.png   app/src/main/res/mipmap-nodpi/ic_launcher.png
+          cp splash.png app/src/main/res/drawable-nodpi/splash.png
+
+      - name: Pastikan keystore ada
+        run: |
+          if [ ! -f signing/release.jks ]; then
+            echo "::warning::signing/release.jks tidak ada, membuat keystore baru (update APK nanti butuh uninstall dulu)"
+            mkdir -p signing
+            keytool -genkeypair -keystore signing/release.jks -storetype JKS \
+              -storepass rpgmwebview -keypass rpgmwebview -alias rpgm \
+              -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=RPGM WebView"
+          fi
+
+      - name: Build release APK
+        run: gradle assembleRelease -PversionCode=${{ github.run_number }} --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RPGM-APK
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error

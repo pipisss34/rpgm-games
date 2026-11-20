@@ -1,0 +1,11 @@
+{
+  "name": "sample-game",
+  "main": "index.html",
+  "js-flags": "--expose-gc",
+  "window": {
+    "title": "Sample Game",
+    "width": 816,
+    "height": 624,
+    "icon": "img/test.png"
+  }
+}
