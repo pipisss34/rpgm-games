@@ -1,0 +1,10 @@
+build/
+.gradle/
+local.properties
+*.iml
+.idea/
+apk/
+# dibuat otomatis oleh workflow dari game/, icon.png, splash.png
+app/src/main/assets/www/
+app/src/main/res/mipmap-nodpi/
+app/src/main/res/drawable-nodpi/

@@ -1,0 +1,67 @@
+plugins {
+    id 'com.android.application'
+}
+
+// ---- config.properties (APP_NAME, APP_ID) ----
+def cfg = new Properties()
+def cfgFile = rootProject.file('config.properties')
+if (cfgFile.exists()) {
+    cfgFile.withReader('UTF-8') { cfg.load(it) }
+}
+def appName = cfg.getProperty('APP_NAME', 'RPGM Game').trim().replace("'", "\\'")
+def appId = cfg.getProperty('APP_ID', 'com.rpgm.webview').trim()
+def verCode = (project.findProperty('versionCode') ?: '1') as Integer
+
+// ---- keystore tetap supaya APK bisa di-update tanpa uninstall (save game aman) ----
+def ksFile = rootProject.file('signing/release.jks')
+
+android {
+    namespace 'com.rpgm.webview'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId appId
+        minSdk 24
+        targetSdk 34
+        versionCode verCode
+        versionName "1.0.${verCode}"
+        resValue 'string', 'app_name', appName
+    }
+
+    buildFeatures {
+        resValues true
+    }
+
+    signingConfigs {
+        release {
+            if (ksFile.exists()) {
+                storeFile ksFile
+                storePassword System.getenv('KEYSTORE_PASSWORD') ?: 'rpgmwebview'
+                keyAlias System.getenv('KEY_ALIAS') ?: 'rpgm'
+                keyPassword System.getenv('KEY_PASSWORD') ?: 'rpgmwebview'
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig ksFile.exists() ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    // Folder aset yang diawali "_" atau "." tetap ikut (default AAPT membuangnya)
+    androidResources {
+        ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
