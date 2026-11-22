@@ -30,10 +30,13 @@ public class VirtualPad extends View {
         void onKey(int keyCode, boolean down);
 
         void onOpenMenu();
+
+        /** Kursor mouse virtual. buttons: bit0 = kiri, bit1 = kanan (keadaan setelah event). */
+        void onMouse(float x, float y, int buttons);
     }
 
     // jenis tombol
-    private static final int ROUND = 0, RECT = 1, MORE = 2, EYE = 3;
+    private static final int ROUND = 0, RECT = 1, MORE = 2, EYE = 3, CURSOR = 4;
     // pemilik pointer
     private static final int OWNER_DPAD = 0, OWNER_KEY = 1, OWNER_TAP = 2;
 
@@ -98,6 +101,37 @@ public class VirtualPad extends View {
 
     private float dpCx, dpCy, dpSize, slop, strokeW;
     private int dirMask; // 1=kiri 2=kanan 4=atas 8=bawah
+
+    // ---- mode kursor mouse ----
+    private boolean cursorMode;
+    private float curX = -1, curY = -1;
+    private int mouseButtons;
+    private boolean cursorFast, tickOn;
+    private int cursorTicks;
+    private final Runnable cursorTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!cursorMode || hidden || dirMask == 0) {
+                tickOn = false;
+                return;
+            }
+            cursorTicks++;
+            float base = Math.min(getWidth(), getHeight());
+            float ramp = 1f + Math.min(2f, cursorTicks / 50f); // makin lama ditahan makin cepat
+            float step = base * 0.006f * ramp * (cursorFast ? 2f : 1f);
+            float dx = ((dirMask & 2) != 0 ? 1f : 0f) - ((dirMask & 1) != 0 ? 1f : 0f);
+            float dy = ((dirMask & 8) != 0 ? 1f : 0f) - ((dirMask & 4) != 0 ? 1f : 0f);
+            if (dx != 0f && dy != 0f) {
+                dx *= 0.7071f;
+                dy *= 0.7071f;
+            }
+            curX = Math.max(0f, Math.min(getWidth() - 1f, curX + dx * step));
+            curY = Math.max(0f, Math.min(getHeight() - 1f, curY + dy * step));
+            sendMouse();
+            invalidate();
+            ui.postDelayed(this, 16);
+        }
+    };
 
     public VirtualPad(Context ctx, SharedPreferences prefs, Listener listener) {
         super(ctx);
@@ -181,6 +215,17 @@ public class VirtualPad extends View {
         invalidate();
     }
 
+    private void setCursorMode(boolean v) {
+        releaseAll(); // lepas semua klik/tombol dulu
+        cursorMode = v;
+        if (v) sendMouse();
+        invalidate();
+    }
+
+    private void sendMouse() {
+        if (listener != null) listener.onMouse(curX, curY, mouseButtons);
+    }
+
     private void setExtraOpen(boolean v) {
         releaseAll();
         extraOpen = v;
@@ -246,6 +291,9 @@ public class VirtualPad extends View {
         float w = getWidth(), h = getHeight();
         if (w <= 0 || h <= 0) return;
 
+        if (curX < 0 || curX > w) curX = w / 2f;
+        if (curY < 0 || curY > h) curY = h / 2f;
+
         float base = Math.min(w, h) * SIZES[sizeIdx];
         float m = base * 0.05f;
         float gap = base * 0.02f;
@@ -275,6 +323,13 @@ public class VirtualPad extends View {
         float rowY = m + er;
         btns.add(rect("PGUP", KeyEvent.KEYCODE_PAGE_UP, m + bw / 2f, rowY, bw, bh, false));
         btns.add(rect("PGDN", KeyEvent.KEYCODE_PAGE_DOWN, m + bw * 1.5f + gap, rowY, bw, bh, false));
+
+        Btn cur = new Btn("KURSOR", 0, CURSOR, false);
+        cur.cx = m + bw * 2.5f + gap * 2;
+        cur.cy = rowY;
+        cur.w = bw;
+        cur.h = bh;
+        btns.add(cur);
 
         float eyeX = w - m - er;
         btns.add(tap(EYE, eyeX, rowY, er * 2));
@@ -306,7 +361,7 @@ public class VirtualPad extends View {
     // ------------------------------------------------------------ hit test
 
     private boolean inside(Btn b, float x, float y) {
-        if (b.kind == RECT) {
+        if (b.kind == RECT || b.kind == CURSOR) {
             return Math.abs(x - b.cx) <= b.w / 2f + slop && Math.abs(y - b.cy) <= b.h / 2f + slop;
         }
         float rr = b.w / 2f + slop;
@@ -342,7 +397,7 @@ public class VirtualPad extends View {
     private Ptr begin(int id, float x, float y) {
         for (int i = btns.size() - 1; i >= 0; i--) {
             Btn b = btns.get(i);
-            if ((b.kind == EYE || b.kind == MORE) && visible(b) && inside(b, x, y)) {
+            if ((b.kind == EYE || b.kind == MORE || b.kind == CURSOR) && visible(b) && inside(b, x, y)) {
                 if (b.kind == EYE) {
                     ui.removeCallbacks(longPress);
                     longId = id;
@@ -366,6 +421,7 @@ public class VirtualPad extends View {
         if (id == longId) ui.removeCallbacks(longPress);
         if (p.owner == OWNER_TAP && !p.longFired && inside(p.tap, x, y)) {
             if (p.tap.kind == EYE) setHidden(!hidden);
+            else if (p.tap.kind == CURSOR) setCursorMode(!cursorMode);
             else setExtraOpen(!extraOpen);
         }
     }
@@ -413,6 +469,7 @@ public class VirtualPad extends View {
     private void refresh() {
         for (Btn b : btns) b.pressed = false;
         int dir = 0;
+        boolean left = false, right = false, fast = false;
         Set<Integer> want = new HashSet<>();
         for (Ptr p : ptrs) {
             if (p.owner == OWNER_DPAD) {
@@ -421,17 +478,27 @@ public class VirtualPad extends View {
                 Btn b = hitKey(p.x, p.y);
                 if (b != null) {
                     b.pressed = true;
-                    want.add(b.keyCode);
+                    if (cursorMode && b.keyCode == KeyEvent.KEYCODE_Z) {
+                        left = true; // OK = klik kiri
+                    } else if (cursorMode && b.keyCode == KeyEvent.KEYCODE_X) {
+                        right = true; // BATAL = klik kanan
+                    } else {
+                        want.add(b.keyCode);
+                        if (b.keyCode == KeyEvent.KEYCODE_SHIFT_LEFT) fast = true;
+                    }
                 }
             } else {
                 p.tap.pressed = inside(p.tap, p.x, p.y);
             }
         }
         dirMask = dir;
-        if ((dir & 1) != 0) want.add(KeyEvent.KEYCODE_DPAD_LEFT);
-        if ((dir & 2) != 0) want.add(KeyEvent.KEYCODE_DPAD_RIGHT);
-        if ((dir & 4) != 0) want.add(KeyEvent.KEYCODE_DPAD_UP);
-        if ((dir & 8) != 0) want.add(KeyEvent.KEYCODE_DPAD_DOWN);
+        int nb = (left ? 1 : 0) | (right ? 2 : 0);
+        if (!cursorMode) { // mode normal: D-pad = tombol panah
+            if ((dir & 1) != 0) want.add(KeyEvent.KEYCODE_DPAD_LEFT);
+            if ((dir & 2) != 0) want.add(KeyEvent.KEYCODE_DPAD_RIGHT);
+            if ((dir & 4) != 0) want.add(KeyEvent.KEYCODE_DPAD_UP);
+            if ((dir & 8) != 0) want.add(KeyEvent.KEYCODE_DPAD_DOWN);
+        }
 
         for (Integer k : want) {
             if (held.add(k)) fire(k, true);
@@ -443,6 +510,26 @@ public class VirtualPad extends View {
                 it.remove();
                 fire(k, false);
             }
+        }
+        cursorFast = fast;
+        if (cursorMode && !hidden) {
+            if (nb != mouseButtons) {
+                boolean newPress = (nb & ~mouseButtons) != 0;
+                mouseButtons = nb;
+                if (newPress) haptic();
+                sendMouse();
+            }
+            if (dir != 0) {
+                if (!tickOn) {
+                    tickOn = true;
+                    ui.post(cursorTick);
+                }
+            } else {
+                cursorTicks = 0;
+            }
+        } else if (mouseButtons != 0) {
+            mouseButtons = 0;
+            sendMouse();
         }
         invalidate();
     }
@@ -461,6 +548,7 @@ public class VirtualPad extends View {
         for (Btn b : btns) {
             if (visible(b)) drawBtn(c, b, op);
         }
+        if (cursorMode && !hidden) drawCursor(c);
     }
 
     private void drawDpad(Canvas c, float op) {
@@ -503,12 +591,12 @@ public class VirtualPad extends View {
     }
 
     private void drawBtn(Canvas c, Btn b, float op) {
-        boolean on = b.pressed || (b.kind == MORE && extraOpen);
+        boolean on = b.pressed || (b.kind == MORE && extraOpen) || (b.kind == CURSOR && cursorMode);
         float eff = (b.kind == EYE && hidden) ? Math.max(0.25f, op * 0.7f) : op;
         fill.setColor(on ? argb(eff + 0.25f, 255, 255, 255) : argb(eff * 0.55f, 0, 0, 0));
         stroke.setColor(argb(eff + 0.15f, 255, 255, 255));
 
-        if (b.kind == RECT) {
+        if (b.kind == RECT || b.kind == CURSOR) {
             rect.set(b.cx - b.w / 2f, b.cy - b.h / 2f, b.cx + b.w / 2f, b.cy + b.h / 2f);
             float rr = b.h * 0.3f;
             c.drawRoundRect(rect, rr, rr, fill);
@@ -526,8 +614,8 @@ public class VirtualPad extends View {
 
     private void drawLabel(Canvas c, Btn b, int fg) {
         text.setColor(fg);
-        float maxW = b.w * (b.kind == RECT ? 0.84f : 0.78f);
-        float base = (b.kind == RECT) ? b.h * 0.42f : b.w * 0.30f;
+        float maxW = b.w * (b.kind == RECT || b.kind == CURSOR ? 0.84f : 0.78f);
+        float base = (b.kind == RECT || b.kind == CURSOR) ? b.h * 0.42f : b.w * 0.30f;
         text.setTextSize(base);
         float tw = text.measureText(b.label);
         if (tw > maxW) text.setTextSize(base * maxW / tw);
@@ -552,6 +640,24 @@ public class VirtualPad extends View {
             c.drawLine(b.cx - e, b.cy + e * 0.8f, b.cx + e, b.cy - e * 0.8f, icon);
         }
         icon.setStyle(Paint.Style.STROKE);
+    }
+
+    private void drawCursor(Canvas c) {
+        float s = Math.max(14f, Math.min(getWidth(), getHeight()) * 0.045f);
+        path.reset();
+        path.moveTo(curX, curY);
+        path.lineTo(curX, curY + s * 1.4f);
+        path.lineTo(curX + s * 0.38f, curY + s * 1.05f);
+        path.lineTo(curX + s * 0.62f, curY + s * 1.65f);
+        path.lineTo(curX + s * 0.85f, curY + s * 1.55f);
+        path.lineTo(curX + s * 0.62f, curY + s * 0.95f);
+        path.lineTo(curX + s * 1.05f, curY + s * 0.95f);
+        path.close();
+        fill.setColor((mouseButtons & 1) != 0 ? Color.rgb(255, 216, 102)
+                : (mouseButtons & 2) != 0 ? Color.rgb(255, 120, 120) : Color.WHITE);
+        stroke.setColor(Color.BLACK);
+        c.drawPath(path, fill);
+        c.drawPath(path, stroke);
     }
 
     private void drawDots(Canvas c, Btn b, int fg) {

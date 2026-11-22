@@ -20,13 +20,14 @@ lalu `gh run watch`, `gh run download -n RPGM-APK`.
 |---|---|
 | Game | Kosongkan `game/`, salin game kamu ke sana (folder hasil deploy Windows/Web). Folder yang berisi `index.html` dicari otomatis, jadi struktur MV (`www/`) maupun MZ (rata) sama-sama jalan. File NW.js (`*.exe`, `*.dll`, `*.pak`, `locales/`, `node_modules/`) dibuang otomatis. |
 | Icon | Timpa `icon.png` di root (persegi, 512x512 atau 1024x1024) |
-| Splash | Timpa `splash.png` di root (tampil sampai title screen siap, lalu fade) |
+| Splash | Timpa `splash.png` di root (tampil 1,7 detik lalu fade; ubah `SPLASH_MS` di `MainActivity.java`) |
 | Nama app / package ID | `config.properties` |
 | Game terlalu besar untuk di-push | Upload zip game ke tempat yang punya link langsung, lalu jalankan workflow manual: `gh workflow run "Build APK" -f game_url=https://...zip` |
 
 ## Tombol virtual
 
 - D-pad 8 arah (geser jari antar arah), **OK** (Z), **BATAL** (X), **DASH** (Shift), **MENU** (Esc), **PGUP**, **PGDN**, **CTRL** (lewati teks), **TAB**.
+- Tombol **KURSOR** (atas, sebelah PGDN): mode mouse virtual untuk game dengan kursor kustom. D-pad menggerakkan kursor (tahan = makin cepat, DASH = lebih cepat), **OK** = klik kiri, **BATAL** = klik kanan. Tap lagi untuk kembali ke mode normal.
 - Tombol **...** membuka baris ekstra: ENTER, SPACE, F2 (FPS), F3 (stretch), F9 (debug, hanya mode test).
 - Ikon **mata** di pojok kanan atas: tap = sembunyikan/tampilkan semua tombol. **Tahan** = menu pengaturan (ukuran, transparansi, getar, muat ulang, log error JS, keluar).
 - Tombol Back Android = Esc.

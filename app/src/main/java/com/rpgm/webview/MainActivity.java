@@ -16,6 +16,7 @@ import android.os.SystemClock;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
@@ -49,17 +50,11 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
     private static final String ASSET_ROOT = "www";
     /** Tambah "?test" di belakang untuk mode test (F9 debug menu aktif). */
     private static final String START_URL = "https://" + HOST + "/index.html";
-    private static final long SPLASH_MIN_MS = 1200;
-    private static final long SPLASH_MAX_MS = 12000;
+    /** Lama splash tampil (ms), lalu fade-out. */
+    private static final long SPLASH_MS = 1700;
     /** true = bisa di-inspect lewat chrome://inspect (USB). */
     private static final boolean DEBUG_WEBVIEW = false;
     private static final int MAX_LOG = 40;
-
-    /** Terdeteksi siap bila scene pertama (selain Scene_Boot) sudah start. Cocok MV & MZ. */
-    private static final String READY_JS =
-            "(function(){try{var S=window.SceneManager;"
-                    + "return !!(S&&S._scene&&S._sceneStarted&&!S._nextScene"
-                    + "&&!(window.Scene_Boot&&S._scene instanceof Scene_Boot));}catch(e){return false;}})()";
 
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ArrayDeque<String> errorLog = new ArrayDeque<>();
@@ -67,9 +62,9 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
     private WebView webView;
     private VirtualPad pad;
     private ImageView splash;
-    private long splashStart;
     private boolean splashGone;
-    private boolean pollStarted;
+    private int mouseButtons;
+    private long mouseDownTime;
 
     // Indeks nama file huruf kecil -> nama asli (untuk game Windows yang beda huruf besar/kecil)
     private Map<String, String> lowerIndex;
@@ -80,7 +75,6 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         SharedPreferences prefs = getSharedPreferences("pad", MODE_PRIVATE);
-        splashStart = SystemClock.uptimeMillis();
 
         rootView = new FrameLayout(this);
         rootView.setBackgroundColor(Color.BLACK);
@@ -106,6 +100,7 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
         applyImmersive();
         setupWebView();
         webView.loadUrl(START_URL);
+        ui.postDelayed(this::hideSplash, SPLASH_MS);
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -163,14 +158,6 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
                 } catch (Exception ignored) {
                 }
                 return true;
-            }
-
-            @Override
-            public void onPageFinished(WebView v, String url) {
-                if (!pollStarted) {
-                    pollStarted = true;
-                    pollReady();
-                }
             }
 
             @Override
@@ -403,23 +390,10 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
 
     // ================= Splash =================
 
-    private void pollReady() {
-        if (splashGone) return;
-        if (SystemClock.uptimeMillis() - splashStart > SPLASH_MAX_MS) {
-            hideSplash();
-            return;
-        }
-        webView.evaluateJavascript(READY_JS, value -> {
-            boolean ready = "true".equals(value);
-            if (ready && SystemClock.uptimeMillis() - splashStart >= SPLASH_MIN_MS) hideSplash();
-            else ui.postDelayed(this::pollReady, 250);
-        });
-    }
-
     private void hideSplash() {
         if (splashGone) return;
         splashGone = true;
-        splash.animate().alpha(0f).setDuration(400)
+        splash.animate().alpha(0f).setDuration(300)
                 .withEndAction(() -> splash.setVisibility(View.GONE)).start();
     }
 
@@ -433,6 +407,41 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
     @Override
     public void onOpenMenu() {
         showMenu();
+    }
+
+    /** Event mouse sungguhan (tool type MOUSE) dari kursor virtual. */
+    @Override
+    public void onMouse(float x, float y, int buttons) {
+        long now = SystemClock.uptimeMillis();
+        int old = mouseButtons;
+        mouseButtons = buttons;
+        int action;
+        boolean touch = true;
+        if (old == 0 && buttons != 0) {
+            action = MotionEvent.ACTION_DOWN;
+            mouseDownTime = now;
+        } else if (old != 0 && buttons == 0) {
+            action = MotionEvent.ACTION_UP;
+        } else if (buttons != 0) {
+            action = MotionEvent.ACTION_MOVE;
+        } else {
+            action = MotionEvent.ACTION_HOVER_MOVE;
+            touch = false;
+        }
+        MotionEvent.PointerProperties pp = new MotionEvent.PointerProperties();
+        pp.id = 0;
+        pp.toolType = MotionEvent.TOOL_TYPE_MOUSE;
+        MotionEvent.PointerCoords pc = new MotionEvent.PointerCoords();
+        pc.x = x;
+        pc.y = y;
+        pc.pressure = buttons != 0 ? 1f : 0f;
+        pc.size = 1f;
+        MotionEvent ev = MotionEvent.obtain(touch ? mouseDownTime : now, now, action, 1,
+                new MotionEvent.PointerProperties[]{pp}, new MotionEvent.PointerCoords[]{pc},
+                0, buttons, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0);
+        if (touch) webView.dispatchTouchEvent(ev);
+        else webView.dispatchGenericMotionEvent(ev);
+        ev.recycle();
     }
 
     private void sendKey(int code, boolean down) {
