@@ -33,10 +33,18 @@ public class VirtualPad extends View {
 
         /** Kursor mouse virtual. buttons: bit0 = kiri, bit1 = kanan (keadaan setelah event). */
         void onMouse(float x, float y, int buttons);
+
+        /** Tombol PUTAR: ganti landscape/portrait. */
+        void onRotate();
+
+        /** Roda mouse virtual. dir: +1 = scroll atas, -1 = scroll bawah. */
+        void onScroll(float x, float y, int dir);
     }
 
     // jenis tombol
-    private static final int ROUND = 0, RECT = 1, MORE = 2, EYE = 3, CURSOR = 4;
+    private static final int ROUND = 0, RECT = 1, MORE = 2, EYE = 3, CURSOR = 4, ROTATE = 5;
+    // kode semu untuk tombol mouse (bukan keycode Android)
+    private static final int MB_LEFT = -1, MB_RIGHT = -2, MB_MID = -3, WHEEL_UP = -4, WHEEL_DOWN = -5;
     // pemilik pointer
     private static final int OWNER_DPAD = 0, OWNER_KEY = 1, OWNER_TAP = 2;
 
@@ -52,6 +60,7 @@ public class VirtualPad extends View {
         final boolean extra;
         float cx, cy, w, h;
         boolean pressed;
+        boolean cursorOnly; // hanya tampil saat mode kursor aktif
 
         Btn(String label, int keyCode, int kind, boolean extra) {
             this.label = label;
@@ -78,6 +87,7 @@ public class VirtualPad extends View {
     }
 
     private final SharedPreferences prefs;
+    private final boolean tyrano;
     private final Listener listener;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final List<Btn> btns = new ArrayList<>();
@@ -133,9 +143,24 @@ public class VirtualPad extends View {
         }
     };
 
-    public VirtualPad(Context ctx, SharedPreferences prefs, Listener listener) {
+    private int wheelDir;
+    private boolean wheelOn;
+    private final Runnable wheelTick = new Runnable() {
+        @Override
+        public void run() {
+            if (!cursorMode || hidden || wheelDir == 0) {
+                wheelOn = false;
+                return;
+            }
+            sendScroll(wheelDir);
+            ui.postDelayed(this, 110);
+        }
+    };
+
+    public VirtualPad(Context ctx, SharedPreferences prefs, Listener listener, boolean tyrano) {
         super(ctx);
         this.prefs = prefs;
+        this.tyrano = tyrano;
         this.listener = listener;
         hidden = prefs.getBoolean("hidden", false);
         extraOpen = prefs.getBoolean("extra", false);
@@ -222,6 +247,10 @@ public class VirtualPad extends View {
         invalidate();
     }
 
+    private void sendScroll(int dir) {
+        if (listener != null) listener.onScroll(curX, curY, dir);
+    }
+
     private void sendMouse() {
         if (listener != null) listener.onMouse(curX, curY, mouseButtons);
     }
@@ -306,6 +335,10 @@ public class VirtualPad extends View {
         dpSize = base * 0.46f;
         dpCx = m + dpSize / 2f;
         dpCy = h - m - dpSize / 2f;
+        if (tyrano) {
+            layoutTyrano(w, h, base, m, gap);
+            return;
+        }
 
         // Tombol bulat A/B/C/D (kanan bawah)
         float r = base * 0.085f;
@@ -351,9 +384,67 @@ public class VirtualPad extends View {
         }
     }
 
+    private static boolean isRect(Btn b) {
+        return b.kind == RECT || b.kind == CURSOR || b.kind == ROTATE;
+    }
+
+    private static boolean isTap(Btn b) {
+        return b.kind == EYE || b.kind == MORE || b.kind == CURSOR || b.kind == ROTATE;
+    }
+
+    /** D-pad: profil rpgm selalu; profil tyrano hanya saat mode kursor. */
+    private boolean dpadVisible() {
+        return !hidden && (!tyrano || cursorMode);
+    }
+
+    private Btn rectK(String label, int key, int kind, float cx, float cy, float w, float h) {
+        Btn b = new Btn(label, key, kind, false);
+        b.cx = cx;
+        b.cy = cy;
+        b.w = w;
+        b.h = h;
+        return b;
+    }
+
+    /** Profil Tyrano: PUTAR, KURSOR, ENTER, BACK, mata; mouse + scroll muncul saat KURSOR aktif. */
+    private void layoutTyrano(float w, float h, float base, float m, float gap) {
+        float r = base * 0.085f;
+        float d = r * 1.3f;
+        float fcx = w - m - d - r;
+        float fcy = h - m - d - r;
+        btns.add(round("ENTER", KeyEvent.KEYCODE_ENTER, fcx + d, fcy, r * 2));
+        btns.add(round("BACK", KeyEvent.KEYCODE_ESCAPE, fcx, fcy + d, r * 2));
+        Btn up = round("SCR UP", WHEEL_UP, fcx, fcy - d, r * 2);
+        up.cursorOnly = true;
+        btns.add(up);
+        Btn dn = round("SCR DN", WHEEL_DOWN, fcx - d, fcy, r * 2);
+        dn.cursorOnly = true;
+        btns.add(dn);
+
+        float er = base * 0.055f;
+        btns.add(tap(EYE, w - m - er, m + er, er * 2));
+
+        float bw = base * 0.20f, bh = base * 0.10f;
+        String[] labels = {"PUTAR", "KURSOR", "KIRI", "KANAN", "TENGAH"};
+        int[] kinds = {ROTATE, CURSOR, RECT, RECT, RECT};
+        int[] keys = {0, 0, MB_LEFT, MB_RIGHT, MB_MID};
+        float x = m, y = m + er;
+        for (int i = 0; i < labels.length; i++) {
+            if (x > m && x + bw > w - m - er * 2 - gap) { // bungkus ke baris berikutnya
+                x = m;
+                y += bh + gap;
+            }
+            Btn b = rectK(labels[i], keys[i], kinds[i], x + bw / 2f, y, bw, bh);
+            b.cursorOnly = i >= 2;
+            btns.add(b);
+            x += bw + gap;
+        }
+    }
+
     private boolean visible(Btn b) {
         if (b.kind == EYE) return true;
         if (hidden) return false;
+        if (b.cursorOnly && !cursorMode) return false;
         if (b.extra) return extraOpen;
         return true;
     }
@@ -361,7 +452,7 @@ public class VirtualPad extends View {
     // ------------------------------------------------------------ hit test
 
     private boolean inside(Btn b, float x, float y) {
-        if (b.kind == RECT || b.kind == CURSOR) {
+        if (isRect(b)) {
             return Math.abs(x - b.cx) <= b.w / 2f + slop && Math.abs(y - b.cy) <= b.h / 2f + slop;
         }
         float rr = b.w / 2f + slop;
@@ -397,7 +488,7 @@ public class VirtualPad extends View {
     private Ptr begin(int id, float x, float y) {
         for (int i = btns.size() - 1; i >= 0; i--) {
             Btn b = btns.get(i);
-            if ((b.kind == EYE || b.kind == MORE || b.kind == CURSOR) && visible(b) && inside(b, x, y)) {
+            if (isTap(b) && visible(b) && inside(b, x, y)) {
                 if (b.kind == EYE) {
                     ui.removeCallbacks(longPress);
                     longId = id;
@@ -410,7 +501,7 @@ public class VirtualPad extends View {
         if (hitKey(x, y) != null) return new Ptr(id, OWNER_KEY, null, x, y);
         float dx = x - dpCx, dy = y - dpCy;
         float rr = dpSize * 0.62f;
-        if (dx * dx + dy * dy <= rr * rr) return new Ptr(id, OWNER_DPAD, null, x, y);
+        if (dpadVisible() && dx * dx + dy * dy <= rr * rr) return new Ptr(id, OWNER_DPAD, null, x, y);
         return null;
     }
 
@@ -422,6 +513,9 @@ public class VirtualPad extends View {
         if (p.owner == OWNER_TAP && !p.longFired && inside(p.tap, x, y)) {
             if (p.tap.kind == EYE) setHidden(!hidden);
             else if (p.tap.kind == CURSOR) setCursorMode(!cursorMode);
+            else if (p.tap.kind == ROTATE) {
+                if (listener != null) listener.onRotate();
+            }
             else setExtraOpen(!extraOpen);
         }
     }
@@ -469,7 +563,8 @@ public class VirtualPad extends View {
     private void refresh() {
         for (Btn b : btns) b.pressed = false;
         int dir = 0;
-        boolean left = false, right = false, fast = false;
+        boolean left = false, right = false, mid = false, fast = false;
+        int wheel = 0;
         Set<Integer> want = new HashSet<>();
         for (Ptr p : ptrs) {
             if (p.owner == OWNER_DPAD) {
@@ -478,7 +573,17 @@ public class VirtualPad extends View {
                 Btn b = hitKey(p.x, p.y);
                 if (b != null) {
                     b.pressed = true;
-                    if (cursorMode && b.keyCode == KeyEvent.KEYCODE_Z) {
+                    if (b.keyCode == MB_LEFT) {
+                        left = true;
+                    } else if (b.keyCode == MB_RIGHT) {
+                        right = true;
+                    } else if (b.keyCode == MB_MID) {
+                        mid = true;
+                    } else if (b.keyCode == WHEEL_UP) {
+                        wheel = 1;
+                    } else if (b.keyCode == WHEEL_DOWN) {
+                        wheel = -1;
+                    } else if (cursorMode && b.keyCode == KeyEvent.KEYCODE_Z) {
                         left = true; // OK = klik kiri
                     } else if (cursorMode && b.keyCode == KeyEvent.KEYCODE_X) {
                         right = true; // BATAL = klik kanan
@@ -492,7 +597,7 @@ public class VirtualPad extends View {
             }
         }
         dirMask = dir;
-        int nb = (left ? 1 : 0) | (right ? 2 : 0);
+        int nb = (left ? 1 : 0) | (right ? 2 : 0) | (mid ? 4 : 0);
         if (!cursorMode) { // mode normal: D-pad = tombol panah
             if ((dir & 1) != 0) want.add(KeyEvent.KEYCODE_DPAD_LEFT);
             if ((dir & 2) != 0) want.add(KeyEvent.KEYCODE_DPAD_RIGHT);
@@ -510,6 +615,11 @@ public class VirtualPad extends View {
                 it.remove();
                 fire(k, false);
             }
+        }
+        wheelDir = (cursorMode && !hidden) ? wheel : 0;
+        if (wheelDir != 0 && !wheelOn) {
+            wheelOn = true;
+            ui.post(wheelTick);
         }
         cursorFast = fast;
         if (cursorMode && !hidden) {
@@ -544,7 +654,7 @@ public class VirtualPad extends View {
     @Override
     protected void onDraw(Canvas c) {
         float op = OPACITIES[opacityIdx];
-        if (!hidden) drawDpad(c, op);
+        if (dpadVisible()) drawDpad(c, op);
         for (Btn b : btns) {
             if (visible(b)) drawBtn(c, b, op);
         }
@@ -596,7 +706,7 @@ public class VirtualPad extends View {
         fill.setColor(on ? argb(eff + 0.25f, 255, 255, 255) : argb(eff * 0.55f, 0, 0, 0));
         stroke.setColor(argb(eff + 0.15f, 255, 255, 255));
 
-        if (b.kind == RECT || b.kind == CURSOR) {
+        if (isRect(b)) {
             rect.set(b.cx - b.w / 2f, b.cy - b.h / 2f, b.cx + b.w / 2f, b.cy + b.h / 2f);
             float rr = b.h * 0.3f;
             c.drawRoundRect(rect, rr, rr, fill);
@@ -614,8 +724,8 @@ public class VirtualPad extends View {
 
     private void drawLabel(Canvas c, Btn b, int fg) {
         text.setColor(fg);
-        float maxW = b.w * (b.kind == RECT || b.kind == CURSOR ? 0.84f : 0.78f);
-        float base = (b.kind == RECT || b.kind == CURSOR) ? b.h * 0.42f : b.w * 0.30f;
+        float maxW = b.w * (isRect(b) ? 0.84f : 0.78f);
+        float base = (isRect(b)) ? b.h * 0.42f : b.w * 0.30f;
         text.setTextSize(base);
         float tw = text.measureText(b.label);
         if (tw > maxW) text.setTextSize(base * maxW / tw);

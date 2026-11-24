@@ -41,3 +41,12 @@ lalu `gh run watch`, `gh run download -n RPGM-APK`.
 - Batas GitHub: file tunggal maksimal 100 MB. Repo publik berarti game-mu terlihat publik, gunakan `--private`.
 - Mode test (F9 debug): ubah `START_URL` di `MainActivity.java` menjadi `.../index.html?test`.
 - Kalau layar splash terpotong/terlalu kecil, ubah `ScaleType.FIT_CENTER` ke `CENTER_CROP` di `MainActivity.java`.
+
+## Profil Tyrano (TyranoScript / Tyrano Builder)
+
+Isi `PROFILE=tyrano` di `config.properties`. Tombol yang tampil:
+
+- **PUTAR**: ganti landscape / portrait (pilihan diingat).
+- **KURSOR**: mode mouse virtual. Saat aktif muncul D-pad (gerak kursor), **KIRI / KANAN / TENGAH** (tombol mouse, bisa ditahan untuk drag) dan **SCR UP / SCR DN** (roda mouse, tahan = berulang). Gerak kursor juga memicu efek hover.
+- **ENTER** (lanjut teks) dan **BACK** (Esc). Tombol Back Android juga = Esc.
+- **Mata** di kanan atas: sembunyikan / tampilkan semua tombol (tahan = pengaturan).

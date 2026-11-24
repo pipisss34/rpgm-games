@@ -4,6 +4,7 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
 import android.content.SharedPreferences;
 import android.content.res.AssetManager;
 import android.graphics.Color;
@@ -59,6 +60,8 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ArrayDeque<String> errorLog = new ArrayDeque<>();
     private FrameLayout rootView;
+    private SharedPreferences prefs;
+    private boolean tyrano;
     private WebView webView;
     private VirtualPad pad;
     private ImageView splash;
@@ -74,7 +77,11 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        SharedPreferences prefs = getSharedPreferences("pad", MODE_PRIVATE);
+        prefs = getSharedPreferences("pad", MODE_PRIVATE);
+        tyrano = "tyrano".equalsIgnoreCase(getString(R.string.pad_profile).trim());
+        if (tyrano && prefs.getBoolean("portrait", false)) {
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT);
+        }
 
         rootView = new FrameLayout(this);
         rootView.setBackgroundColor(Color.BLACK);
@@ -84,7 +91,7 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
         rootView.addView(webView, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
-        pad = new VirtualPad(this, prefs, this);
+        pad = new VirtualPad(this, prefs, this, tyrano);
         rootView.addView(pad, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
@@ -441,6 +448,32 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
                 0, buttons, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0);
         if (touch) webView.dispatchTouchEvent(ev);
         else webView.dispatchGenericMotionEvent(ev);
+        ev.recycle();
+    }
+
+    @Override
+    public void onRotate() {
+        boolean portrait = !prefs.getBoolean("portrait", false);
+        prefs.edit().putBoolean("portrait", portrait).apply();
+        setRequestedOrientation(portrait ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                : ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+    }
+
+    /** Roda mouse sungguhan (ACTION_SCROLL, AXIS_VSCROLL) di posisi kursor. */
+    @Override
+    public void onScroll(float x, float y, int dir) {
+        long now = SystemClock.uptimeMillis();
+        MotionEvent.PointerProperties pp = new MotionEvent.PointerProperties();
+        pp.id = 0;
+        pp.toolType = MotionEvent.TOOL_TYPE_MOUSE;
+        MotionEvent.PointerCoords pc = new MotionEvent.PointerCoords();
+        pc.x = x;
+        pc.y = y;
+        pc.setAxisValue(MotionEvent.AXIS_VSCROLL, dir);
+        MotionEvent ev = MotionEvent.obtain(now, now, MotionEvent.ACTION_SCROLL, 1,
+                new MotionEvent.PointerProperties[]{pp}, new MotionEvent.PointerCoords[]{pc},
+                0, mouseButtons, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0);
+        webView.dispatchGenericMotionEvent(ev);
         ev.recycle();
     }
 
