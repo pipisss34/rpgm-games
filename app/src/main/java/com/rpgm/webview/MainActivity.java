@@ -17,6 +17,7 @@ import android.os.SystemClock;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
+import android.util.Base64;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
@@ -28,6 +29,7 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.webkit.ConsoleMessage;
+import android.webkit.JavascriptInterface;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -48,6 +50,9 @@ import android.widget.Toast;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -57,6 +62,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeSet;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.nio.charset.StandardCharsets;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -81,6 +90,7 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
     private FrameLayout rootView;
     private SharedPreferences prefs;
     private boolean tyrano;
+    private boolean nodeShim;
     private WebView webView;
     private VirtualPad pad;
     private ImageView splash;
@@ -98,6 +108,7 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         prefs = getSharedPreferences("pad", MODE_PRIVATE);
         tyrano = "tyrano".equalsIgnoreCase(getString(R.string.pad_profile).trim());
+        nodeShim = !"false".equalsIgnoreCase(getString(R.string.node_shim).trim());
         if (tyrano && prefs.getBoolean("portrait", false)) {
             setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT);
         }
@@ -157,6 +168,7 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
         webView.setFocusable(true);
         webView.setFocusableInTouchMode(true);
 
+        if (nodeShim) webView.addJavascriptInterface(new FsBridge(), "AndroidFS");
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(ConsoleMessage m) {
@@ -204,6 +216,10 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
         if (path == null || path.isEmpty() || path.equals("/")) path = "/index.html";
         if (path.contains("..")) return status(403, "Forbidden");
         String assetPath = ASSET_ROOT + path;
+        if (nodeShim) {
+            if (path.equals("/__nodeshim.js")) return serveShim();
+            if (path.equals("/index.html")) return serveHtmlWithShim(assetPath);
+        }
 
         InputStream in = openAsset(assetPath);
         if (in == null) return status(404, "Not Found");
@@ -264,6 +280,287 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
             }
         }
         return new WebResourceResponse(mime, enc, 200, "OK", h, in);
+    }
+
+
+    // ================= Node.js / NW.js shim =================
+
+    private Map<String, String> plainHeaders() {
+        Map<String, String> h = new HashMap<>();
+        h.put("Access-Control-Allow-Origin", "*");
+        h.put("Cache-Control", "no-cache");
+        return h;
+    }
+
+    private WebResourceResponse serveShim() {
+        try {
+            return new WebResourceResponse("text/javascript", "UTF-8", 200, "OK",
+                    plainHeaders(), getAssets().open("nodeshim.js"));
+        } catch (IOException e) {
+            return status(404, "Not Found");
+        }
+    }
+
+    private WebResourceResponse serveHtmlWithShim(String assetPath) {
+        InputStream in = openAsset(assetPath);
+        if (in == null) return status(404, "Not Found");
+        try {
+            String html = new String(readAll(in), StandardCharsets.UTF_8);
+            String tag = "<script src=\"/__nodeshim.js\"></script>";
+            Matcher m = Pattern.compile("<head(\\s[^>]*)?>", Pattern.CASE_INSENSITIVE).matcher(html);
+            if (m.find()) {
+                html = html.substring(0, m.end()) + tag + html.substring(m.end());
+            } else {
+                html = tag + html;
+            }
+            return new WebResourceResponse("text/html", "UTF-8", 200, "OK", plainHeaders(),
+                    new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)));
+        } catch (IOException e) {
+            return status(500, "Error");
+        } finally {
+            try {
+                in.close();
+            } catch (IOException ignored) {
+            }
+        }
+    }
+
+    private static byte[] readAll(InputStream in) throws IOException {
+        ByteArrayOutputStream bo = new ByteArrayOutputStream();
+        byte[] buf = new byte[16384];
+        int n;
+        while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+        return bo.toByteArray();
+    }
+
+    /** Jembatan fs untuk nodeshim.js: baca aset game, tulis ke penyimpanan app (files/nodefs). */
+    private final class FsBridge {
+        private File root() {
+            File r = new File(getFilesDir(), "nodefs");
+            r.mkdirs();
+            return r;
+        }
+
+        private String clean(String p) {
+            if (p == null || !p.startsWith("/") || p.contains("..")) return null;
+            while (p.length() > 1 && p.endsWith("/")) p = p.substring(0, p.length() - 1);
+            return p;
+        }
+
+        private File ov(String p) {
+            try {
+                File r = root();
+                File f = new File(r, p);
+                String rc = r.getCanonicalPath();
+                String fc = f.getCanonicalPath();
+                if (fc.equals(rc) || fc.startsWith(rc + File.separator)) return f;
+            } catch (IOException ignored) {
+            }
+            return null;
+        }
+
+        /** Path aset nyata (tanpa peduli besar-kecil huruf) bila berupa file, selain itu null. */
+        private String assetFile(String p) {
+            String ap = p.equals("/") ? ASSET_ROOT : ASSET_ROOT + p;
+            try {
+                getAssets().open(ap).close();
+                return ap;
+            } catch (IOException ignored) {
+            }
+            String real = index().get(ap.toLowerCase(Locale.ROOT));
+            if (real != null) {
+                try {
+                    getAssets().open(real).close();
+                    return real;
+                } catch (IOException ignored) {
+                }
+            }
+            return null;
+        }
+
+        private String[] assetList(String p) {
+            String ap = p.equals("/") ? ASSET_ROOT : ASSET_ROOT + p;
+            try {
+                String[] r = getAssets().list(ap);
+                if (r != null && r.length > 0) return r;
+            } catch (IOException ignored) {
+            }
+            String pre = ap.toLowerCase(Locale.ROOT) + "/";
+            TreeSet<String> out = new TreeSet<>();
+            for (String real : index().values()) {
+                if (real.toLowerCase(Locale.ROOT).startsWith(pre)) {
+                    String rest = real.substring(pre.length());
+                    int i = rest.indexOf('/');
+                    out.add(i < 0 ? rest : rest.substring(0, i));
+                }
+            }
+            return out.toArray(new String[0]);
+        }
+
+        private byte[] readBytes(String p) {
+            try {
+                File f = ov(p);
+                if (f != null && f.isFile()) {
+                    try (FileInputStream in = new FileInputStream(f)) {
+                        return readAll(in);
+                    }
+                }
+                String a = assetFile(p);
+                if (a != null) {
+                    try (InputStream in = getAssets().open(a)) {
+                        return readAll(in);
+                    }
+                }
+            } catch (IOException ignored) {
+            }
+            return null;
+        }
+
+        private boolean write(String p, byte[] data, boolean append) {
+            try {
+                File f = ov(p);
+                if (f == null || f.isDirectory()) return false;
+                File par = f.getParentFile();
+                if (par != null) par.mkdirs();
+                if (append && !f.exists()) {
+                    byte[] old = readBytes(p);
+                    if (old != null) {
+                        try (FileOutputStream o = new FileOutputStream(f, false)) {
+                            o.write(old);
+                        }
+                    }
+                }
+                try (FileOutputStream o = new FileOutputStream(f, append)) {
+                    o.write(data);
+                }
+                return true;
+            } catch (IOException e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public String stat(String p) {
+            p = clean(p);
+            if (p == null) return "";
+            File f = ov(p);
+            if (f != null && f.exists()) {
+                return String.format(Locale.ROOT, "{\"t\":\"%s\",\"s\":%d,\"m\":%d}",
+                        f.isDirectory() ? "d" : "f", f.length(), f.lastModified());
+            }
+            String a = assetFile(p);
+            if (a != null) {
+                long size = 0;
+                try (InputStream in = getAssets().open(a)) {
+                    size = in.available();
+                } catch (IOException ignored) {
+                }
+                return "{\"t\":\"f\",\"s\":" + size + ",\"m\":0}";
+            }
+            if (p.equals("/") || assetList(p).length > 0) return "{\"t\":\"d\",\"s\":0,\"m\":0}";
+            return "";
+        }
+
+        @JavascriptInterface
+        public String list(String p) {
+            p = clean(p);
+            JSONArray arr = new JSONArray();
+            if (p == null) return arr.toString();
+            TreeSet<String> names = new TreeSet<>();
+            File f = ov(p);
+            if (f != null && f.isDirectory()) {
+                String[] l = f.list();
+                if (l != null) for (String n : l) names.add(n);
+            }
+            for (String n : assetList(p)) names.add(n);
+            for (String n : names) arr.put(n);
+            return arr.toString();
+        }
+
+        @JavascriptInterface
+        public String readText(String p) {
+            p = clean(p);
+            byte[] b = p == null ? null : readBytes(p);
+            return b == null ? null : new String(b, StandardCharsets.UTF_8);
+        }
+
+        @JavascriptInterface
+        public String readB64(String p) {
+            p = clean(p);
+            byte[] b = p == null ? null : readBytes(p);
+            return b == null ? null : Base64.encodeToString(b, Base64.NO_WRAP);
+        }
+
+        @JavascriptInterface
+        public boolean writeText(String p, String text, boolean append) {
+            p = clean(p);
+            return p != null && text != null && write(p, text.getBytes(StandardCharsets.UTF_8), append);
+        }
+
+        @JavascriptInterface
+        public boolean writeB64(String p, String b64, boolean append) {
+            p = clean(p);
+            if (p == null || b64 == null) return false;
+            try {
+                return write(p, Base64.decode(b64, Base64.DEFAULT), append);
+            } catch (IllegalArgumentException e) {
+                return false;
+            }
+        }
+
+        @JavascriptInterface
+        public boolean mkdir(String p) {
+            p = clean(p);
+            File f = p == null ? null : ov(p);
+            return f != null && (f.isDirectory() || f.mkdirs());
+        }
+
+        private boolean delete(File f) {
+            File[] kids = f.listFiles();
+            if (kids != null) for (File k : kids) delete(k);
+            return f.delete();
+        }
+
+        @JavascriptInterface
+        public boolean remove(String p) {
+            p = clean(p);
+            File f = p == null || p.equals("/") ? null : ov(p);
+            return f != null && f.exists() && delete(f);
+        }
+
+        @JavascriptInterface
+        public boolean rename(String a, String b) {
+            a = clean(a);
+            b = clean(b);
+            if (a == null || b == null) return false;
+            File fa = ov(a);
+            File fb = ov(b);
+            if (fa == null || fb == null) return false;
+            File par = fb.getParentFile();
+            if (par != null) par.mkdirs();
+            if (fa.exists()) return fa.renameTo(fb);
+            byte[] data = readBytes(a);
+            return data != null && write(b, data, false);
+        }
+
+        @JavascriptInterface
+        public void quit() {
+            runOnUiThread(() -> finishAndRemoveTask());
+        }
+
+        @JavascriptInterface
+        public void openUrl(String url) {
+            if (url == null) return;
+            final Uri u = Uri.parse(url);
+            String sc = u.getScheme();
+            if (!"http".equalsIgnoreCase(sc) && !"https".equalsIgnoreCase(sc)) return;
+            runOnUiThread(() -> {
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, u));
+                } catch (RuntimeException ignored) {
+                }
+            });
+        }
     }
 
     private InputStream openAsset(String assetPath) {

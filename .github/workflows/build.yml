@@ -20,17 +20,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Siapkan Android SDK (bawaan runner)
-        run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKM" --licenses > /dev/null || true
-          "$SDKM" "platforms;android-34" "build-tools;34.0.0"
+      - uses: android-actions/setup-android@v3
+
+      - name: Install SDK platform + build-tools
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
 
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -53,6 +51,7 @@ jobs:
           test -f icon.png   || { echo "::error::icon.png tidak ada di root repo"; exit 1; }
           test -f splash.png || { echo "::error::splash.png tidak ada di root repo"; exit 1; }
 
+          # cari folder yang berisi index.html (paling dangkal) -> mendukung MV (www/) dan MZ (flat)
           ROOT=$(find game -name index.html -not -path '*/node_modules/*' -printf '%d %h\n' | sort -n | head -n1 | cut -d' ' -f2-)
           if [ -z "$ROOT" ]; then
             echo "::error::index.html tidak ditemukan di folder game/"
@@ -62,8 +61,9 @@ jobs:
 
           rm -rf app/src/main/assets/www
           mkdir -p app/src/main/assets/www
+          # buang file runtime NW.js yang tidak berguna di Android
           rsync -a \
-            --exclude 'node_modules' --exclude '.git' \
+            --exclude '.git' \
             --exclude '*.exe' --exclude '*.dll' --exclude '*.pak' \
             --exclude '/locales' --exclude '/swiftshader' \
             --exclude '/icudtl.dat' --exclude '/natives_blob.bin' \
@@ -78,7 +78,7 @@ jobs:
       - name: Pastikan keystore ada
         run: |
           if [ ! -f signing/release.jks ]; then
-            echo "::warning::signing/release.jks tidak ada, membuat keystore baru"
+            echo "::warning::signing/release.jks tidak ada, membuat keystore baru (update APK nanti butuh uninstall dulu)"
             mkdir -p signing
             keytool -genkeypair -keystore signing/release.jks -storetype JKS \
               -storepass rpgmwebview -keypass rpgmwebview -alias rpgm \

@@ -60,3 +60,14 @@ Buka baris ekstra lewat tombol **...** lalu tap **CHEAT**. Daftar saklar dan var
 - Kolom cari menyaring berdasarkan nama atau nomor. **Segarkan** memuat ulang nilai terbaru dari game.
 - Game harus sudah dimulai (New Game atau muat save), karena saklar dan variabel baru ada setelah itu.
 - Semua tombol selain D-pad pada profil rpgm sekarang berukuran 3/4 (`BTN_SCALE` di `VirtualPad.java`).
+
+## Emulasi Node.js / NW.js
+
+Game MV/MZ versi PC sering memanggil `require('fs')`, `require('path')`, `nw.gui`, `process.platform`, dst. Di WebView tidak ada Node, jadi APK menyisipkan `nodeshim.js` ke `index.html` (aktif otomatis untuk profil `rpgm`).
+
+- `require` mendukung `fs`, `path`, `os`, `util`, `events`, `url`, `buffer`, `crypto` (dasar), `nw.gui`, plus file `.js`/`.json` relatif dan `node_modules` milik game.
+- `fs` membaca file game (folder `www`) dan menulis ke penyimpanan app (`files/nodefs`), jadi plugin yang menyimpan file (mis. save/config) tetap jalan. Hapus/ubah file bawaan game hanya berlaku pada salinan tulis.
+- `process` sengaja berupa fungsi, bukan object, supaya `Utils.isNwjs()` RPG Maker tetap `false` dan inti MV/MZ tetap berjalan di mode browser (aman).
+- `nw.Window.get()`, `nw.Shell.openExternal`, `nw.App.quit` tersedia (sebagian stub). `process.exit()` menutup app.
+- Tidak didukung: `child_process`, modul native (`.node`), `http`/`net`/`zlib` sungguhan. Modul tak dikenal mengembalikan stub kosong dan mencatat `[nodeshim] require('x') ...` di Log error JS (tahan tombol mata).
+- Matikan dengan `NODE_SHIM=false` di `config.properties` (profil `tyrano` default mati).

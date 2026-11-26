@@ -11,6 +11,7 @@ if (cfgFile.exists()) {
 def appName = cfg.getProperty('APP_NAME', 'RPGM Game').trim().replace("'", "\\'")
 def appId = cfg.getProperty('APP_ID', 'com.rpgm.webview').trim()
 def padProfile = cfg.getProperty('PROFILE', 'rpgm').trim()
+def nodeShim = cfg.getProperty('NODE_SHIM', padProfile == 'tyrano' ? 'false' : 'true').trim()
 def verCode = (project.findProperty('versionCode') ?: '1') as Integer
 
 // ---- keystore tetap supaya APK bisa di-update tanpa uninstall (save game aman) ----
@@ -28,6 +29,7 @@ android {
         versionName "1.0.${verCode}"
         resValue 'string', 'app_name', appName
         resValue 'string', 'pad_profile', padProfile
+        resValue 'string', 'node_shim', nodeShim
     }
 
     buildFeatures {
