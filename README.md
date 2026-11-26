@@ -50,3 +50,13 @@ Isi `PROFILE=tyrano` di `config.properties`. Tombol yang tampil:
 - **KURSOR**: mode mouse virtual. Saat aktif muncul D-pad (gerak kursor), **KIRI / KANAN / TENGAH** (tombol mouse, bisa ditahan untuk drag) dan **SCR UP / SCR DN** (roda mouse, tahan = berulang). Gerak kursor juga memicu efek hover.
 - **ENTER** (lanjut teks) dan **BACK** (Esc). Tombol Back Android juga = Esc.
 - **Mata** di kanan atas: sembunyikan / tampilkan semua tombol (tahan = pengaturan).
+
+## Tombol CHEAT (profil rpgm)
+
+Buka baris ekstra lewat tombol **...** lalu tap **CHEAT**. Daftar saklar dan variabel dibaca otomatis dari `data/System.json` game.
+
+- Tab **Saklar**: centang = ON, hilangkan centang = OFF (langsung berlaku di game).
+- Tab **Variabel**: tap salah satu, isi angka atau pakai tombol -100 / -10 / -1 / +1 / +10 / +100, lalu **Set**.
+- Kolom cari menyaring berdasarkan nama atau nomor. **Segarkan** memuat ulang nilai terbaru dari game.
+- Game harus sudah dimulai (New Game atau muat save), karena saklar dan variabel baru ada setelah itu.
+- Semua tombol selain D-pad pada profil rpgm sekarang berukuran 3/4 (`BTN_SCALE` di `VirtualPad.java`).

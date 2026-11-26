@@ -14,11 +14,16 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.text.Editable;
+import android.text.InputType;
+import android.text.TextWatcher;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewGroup;
+import android.view.inputmethod.EditorInfo;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
@@ -30,18 +35,32 @@ import android.webkit.WebResourceResponse;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.BaseAdapter;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
+import android.widget.ListView;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+import org.json.JSONTokener;
 
 public class MainActivity extends Activity implements VirtualPad.Listener {
 
@@ -547,6 +566,299 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
                 .setTitle("Log error JS")
                 .setMessage(sb.toString())
                 .setPositiveButton("Tutup", null)
+                .show();
+    }
+
+    // ================= Cheat: saklar & variabel dari System.json =================
+
+    private static final String CHEAT_READ_JS =
+            "(function(){try{var S=window.$gameSwitches,V=window.$gameVariables;"
+                    + "if(!S||!V)return null;return JSON.stringify({s:S._data,v:V._data});}catch(e){return null;}})()";
+
+    private static final class CheatItem {
+        final int id;
+        final String label;
+
+        CheatItem(int id, String name) {
+            this.id = id;
+            this.label = "#" + id + "  " + (name.isEmpty() ? "(tanpa nama)" : name);
+        }
+    }
+
+    private final List<CheatItem> cheatSwitches = new ArrayList<>();
+    private final List<CheatItem> cheatVars = new ArrayList<>();
+    private boolean[] swOn = new boolean[0];
+    private String[] varVal = new String[0];
+    private boolean cheatNamesLoaded;
+    private int cheatTab; // 0 = saklar, 1 = variabel
+
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
+    @Override
+    public void onCheat() {
+        if (!loadCheatNames()) {
+            Toast.makeText(this, "System.json tidak ditemukan / tidak terbaca (bukan game RPG Maker?)",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        webView.evaluateJavascript(CHEAT_READ_JS, value -> {
+            if (!parseCheatValues(value)) {
+                Toast.makeText(MainActivity.this,
+                        "Game belum dimulai. Mulai New Game atau muat save dulu.", Toast.LENGTH_LONG).show();
+                return;
+            }
+            showCheat();
+        });
+    }
+
+    private boolean loadCheatNames() {
+        if (cheatNamesLoaded) return true;
+        InputStream in = openAsset(ASSET_ROOT + "/data/System.json");
+        if (in == null) return false;
+        try {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+            String txt = bos.toString("UTF-8");
+            if (txt.startsWith("﻿")) txt = txt.substring(1);
+            JSONObject root = new JSONObject(txt);
+            fillCheat(cheatSwitches, root.optJSONArray("switches"));
+            fillCheat(cheatVars, root.optJSONArray("variables"));
+            cheatNamesLoaded = true;
+            return true;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            closeQuietly(in);
+        }
+    }
+
+    private static void fillCheat(List<CheatItem> out, JSONArray arr) {
+        out.clear();
+        if (arr == null) return;
+        for (int i = 1; i < arr.length(); i++) {
+            out.add(new CheatItem(i, arr.isNull(i) ? "" : arr.optString(i, "")));
+        }
+    }
+
+    private boolean parseCheatValues(String value) {
+        if (value == null || value.equals("null")) return false;
+        try {
+            Object o = new JSONTokener(value).nextValue();
+            if (!(o instanceof String)) return false;
+            JSONObject j = new JSONObject((String) o);
+            JSONArray s = j.optJSONArray("s");
+            JSONArray v = j.optJSONArray("v");
+            int sn = cheatSwitches.isEmpty() ? 0 : cheatSwitches.get(cheatSwitches.size() - 1).id;
+            int vn = cheatVars.isEmpty() ? 0 : cheatVars.get(cheatVars.size() - 1).id;
+            swOn = new boolean[sn + 1];
+            varVal = new String[vn + 1];
+            for (int i = 1; i <= sn; i++) {
+                swOn[i] = s != null && i < s.length() && !s.isNull(i) && s.optBoolean(i, false);
+            }
+            for (int i = 1; i <= vn; i++) {
+                varVal[i] = (v == null || i >= v.length() || v.isNull(i)) ? "0" : String.valueOf(v.opt(i));
+            }
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private void cheatSetSwitch(int id, boolean on) {
+        webView.evaluateJavascript("(function(){try{$gameSwitches.setValue(" + id + "," + on
+                + ");$gameMap.requestRefresh();}catch(e){}})()", null);
+    }
+
+    private void cheatSetVar(int id, String num) {
+        webView.evaluateJavascript("(function(){try{$gameVariables.setValue(" + id + "," + num
+                + ");$gameMap.requestRefresh();}catch(e){}})()", null);
+    }
+
+    private static double parseNum(String s) {
+        try {
+            double d = Double.parseDouble(s.trim());
+            return (Double.isNaN(d) || Double.isInfinite(d)) ? 0 : d;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private static String fmtNum(double d) {
+        if (d == Math.rint(d) && Math.abs(d) < 1e15) return String.valueOf((long) d);
+        return String.valueOf(d);
+    }
+
+    private void showCheat() {
+        final List<CheatItem> shown = new ArrayList<>();
+        final BaseAdapter adapter = new BaseAdapter() {
+            @Override
+            public int getCount() {
+                return shown.size();
+            }
+
+            @Override
+            public Object getItem(int position) {
+                return shown.get(position);
+            }
+
+            @Override
+            public long getItemId(int position) {
+                return shown.get(position).id;
+            }
+
+            @Override
+            public View getView(int position, View convertView, ViewGroup parent) {
+                final CheatItem it = shown.get(position);
+                if (cheatTab == 0) {
+                    CheckBox cb = (convertView instanceof CheckBox) ? (CheckBox) convertView
+                            : new CheckBox(MainActivity.this);
+                    cb.setOnCheckedChangeListener(null);
+                    cb.setText(it.label);
+                    cb.setTextColor(Color.WHITE);
+                    cb.setPadding(dp(8), dp(10), dp(8), dp(10));
+                    cb.setChecked(swOn[it.id]);
+                    cb.setOnCheckedChangeListener((btn, on) -> {
+                        swOn[it.id] = on;
+                        cheatSetSwitch(it.id, on);
+                    });
+                    return cb;
+                }
+                TextView tv = (convertView != null && convertView.getClass() == TextView.class)
+                        ? (TextView) convertView : new TextView(MainActivity.this);
+                tv.setText(it.label + "   =   " + varVal[it.id]);
+                tv.setTextColor(Color.WHITE);
+                tv.setTextSize(16);
+                tv.setPadding(dp(12), dp(12), dp(12), dp(12));
+                return tv;
+            }
+        };
+
+        final EditText search = new EditText(this);
+        search.setHint("Cari nama atau nomor...");
+        search.setHintTextColor(Color.GRAY);
+        search.setTextColor(Color.WHITE);
+        search.setSingleLine(true);
+        search.setImeOptions(EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+
+        final Runnable refilter = () -> {
+            String q = search.getText().toString().trim().toLowerCase(Locale.ROOT);
+            shown.clear();
+            for (CheatItem it : (cheatTab == 0 ? cheatSwitches : cheatVars)) {
+                if (q.isEmpty() || it.label.toLowerCase(Locale.ROOT).contains(q)) shown.add(it);
+            }
+            adapter.notifyDataSetChanged();
+        };
+        search.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) {
+            }
+
+            @Override
+            public void onTextChanged(CharSequence s, int a, int b, int c) {
+                refilter.run();
+            }
+
+            @Override
+            public void afterTextChanged(Editable s) {
+            }
+        });
+
+        final Button tabS = new Button(this);
+        final Button tabV = new Button(this);
+        tabS.setText("Saklar (" + cheatSwitches.size() + ")");
+        tabV.setText("Variabel (" + cheatVars.size() + ")");
+        final ListView list = new ListView(this);
+        list.setAdapter(adapter);
+        final Runnable paintTabs = () -> {
+            tabS.setAlpha(cheatTab == 0 ? 1f : 0.45f);
+            tabV.setAlpha(cheatTab == 1 ? 1f : 0.45f);
+        };
+        tabS.setOnClickListener(v -> {
+            cheatTab = 0;
+            paintTabs.run();
+            refilter.run();
+            list.setSelection(0);
+        });
+        tabV.setOnClickListener(v -> {
+            cheatTab = 1;
+            paintTabs.run();
+            refilter.run();
+            list.setSelection(0);
+        });
+        list.setOnItemClickListener((parent, view, pos, id) -> {
+            if (cheatTab == 1 && pos < shown.size()) editCheatVar(shown.get(pos), adapter);
+        });
+
+        LinearLayout tabs = new LinearLayout(this);
+        tabs.setOrientation(LinearLayout.HORIZONTAL);
+        tabs.addView(tabS, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        tabs.addView(tabV, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(12), dp(8), dp(12), 0);
+        box.addView(tabs);
+        box.addView(search);
+        int listH = (int) (getResources().getDisplayMetrics().heightPixels * 0.45f);
+        box.addView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, listH));
+
+        paintTabs.run();
+        refilter.run();
+
+        AlertDialog dlg = new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Cheat")
+                .setView(box)
+                .setPositiveButton("Tutup", null)
+                .setNeutralButton("Segarkan", (d, w) -> onCheat())
+                .create();
+        dlg.setOnDismissListener(d -> webView.requestFocus());
+        dlg.show();
+    }
+
+    private void editCheatVar(final CheatItem it, final BaseAdapter adapter) {
+        final EditText et = new EditText(this);
+        et.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_SIGNED
+                | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        et.setImeOptions(EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+        et.setText(varVal[it.id]);
+        et.setSelectAllOnFocus(true);
+        et.setTextColor(Color.WHITE);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        int[] deltas = {-100, -10, -1, 1, 10, 100};
+        for (int dv : deltas) {
+            final int delta = dv;
+            Button b = new Button(this);
+            b.setText(delta > 0 ? "+" + delta : String.valueOf(delta));
+            b.setAllCaps(false);
+            b.setOnClickListener(v -> {
+                et.setText(fmtNum(parseNum(et.getText().toString()) + delta));
+                et.setSelection(et.length());
+            });
+            row.addView(b, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        }
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), 0);
+        box.addView(et);
+        box.addView(row);
+
+        new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle(it.label)
+                .setView(box)
+                .setPositiveButton("Set", (dlg, w) -> {
+                    String s = fmtNum(parseNum(et.getText().toString()));
+                    varVal[it.id] = s;
+                    cheatSetVar(it.id, s);
+                    adapter.notifyDataSetChanged();
+                })
+                .setNegativeButton("Batal", null)
                 .show();
     }
 

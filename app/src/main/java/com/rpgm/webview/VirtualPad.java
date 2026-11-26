@@ -37,17 +37,22 @@ public class VirtualPad extends View {
         /** Tombol PUTAR: ganti landscape/portrait. */
         void onRotate();
 
+        /** Tombol CHEAT (profil rpgm): buka panel saklar/variabel. */
+        void onCheat();
+
         /** Roda mouse virtual. dir: +1 = scroll atas, -1 = scroll bawah. */
         void onScroll(float x, float y, int dir);
     }
 
     // jenis tombol
-    private static final int ROUND = 0, RECT = 1, MORE = 2, EYE = 3, CURSOR = 4, ROTATE = 5;
+    private static final int ROUND = 0, RECT = 1, MORE = 2, EYE = 3, CURSOR = 4, ROTATE = 5, CHEAT = 6;
     // kode semu untuk tombol mouse (bukan keycode Android)
     private static final int MB_LEFT = -1, MB_RIGHT = -2, MB_MID = -3, WHEEL_UP = -4, WHEEL_DOWN = -5;
     // pemilik pointer
     private static final int OWNER_DPAD = 0, OWNER_KEY = 1, OWNER_TAP = 2;
 
+    /** Skala semua tombol selain D-pad pada profil rpgm. */
+    private static final float BTN_SCALE = 0.75f;
     private static final float[] SIZES = {0.82f, 1f, 1.2f};
     private static final String[] SIZE_LABELS = {"Kecil", "Sedang", "Besar"};
     private static final float[] OPACITIES = {0.30f, 0.45f, 0.65f, 0.85f};
@@ -341,7 +346,7 @@ public class VirtualPad extends View {
         }
 
         // Tombol bulat A/B/C/D (kanan bawah)
-        float r = base * 0.085f;
+        float r = base * 0.085f * BTN_SCALE;
         float d = r * 1.3f;
         float fcx = w - m - d - r;
         float fcy = h - m - d - r;
@@ -351,8 +356,8 @@ public class VirtualPad extends View {
         btns.add(round("MENU", KeyEvent.KEYCODE_ESCAPE, fcx, fcy - d, r * 2));
 
         // Baris atas
-        float bw = base * 0.20f, bh = base * 0.10f;
-        float er = base * 0.055f;
+        float bw = base * 0.20f * BTN_SCALE, bh = base * 0.10f * BTN_SCALE;
+        float er = base * 0.055f * BTN_SCALE;
         float rowY = m + er;
         btns.add(rect("PGUP", KeyEvent.KEYCODE_PAGE_UP, m + bw / 2f, rowY, bw, bh, false));
         btns.add(rect("PGDN", KeyEvent.KEYCODE_PAGE_DOWN, m + bw * 1.5f + gap, rowY, bw, bh, false));
@@ -382,14 +387,20 @@ public class VirtualPad extends View {
             float x = w - m - bw2 / 2f - i * (bw2 + gap);
             btns.add(rect(names[i], keys[i], x, row2Y, bw2, bh, true));
         }
+        Btn cheat = new Btn("CHEAT", 0, CHEAT, true);
+        cheat.cx = w - m - bw2 / 2f - names.length * (bw2 + gap);
+        cheat.cy = row2Y;
+        cheat.w = bw2;
+        cheat.h = bh;
+        btns.add(cheat);
     }
 
     private static boolean isRect(Btn b) {
-        return b.kind == RECT || b.kind == CURSOR || b.kind == ROTATE;
+        return b.kind == RECT || b.kind == CURSOR || b.kind == ROTATE || b.kind == CHEAT;
     }
 
     private static boolean isTap(Btn b) {
-        return b.kind == EYE || b.kind == MORE || b.kind == CURSOR || b.kind == ROTATE;
+        return b.kind == EYE || b.kind == MORE || b.kind == CURSOR || b.kind == ROTATE || b.kind == CHEAT;
     }
 
     /** D-pad: profil rpgm selalu; profil tyrano hanya saat mode kursor. */
@@ -515,6 +526,8 @@ public class VirtualPad extends View {
             else if (p.tap.kind == CURSOR) setCursorMode(!cursorMode);
             else if (p.tap.kind == ROTATE) {
                 if (listener != null) listener.onRotate();
+            } else if (p.tap.kind == CHEAT) {
+                if (listener != null) listener.onCheat();
             }
             else setExtraOpen(!extraOpen);
         }
