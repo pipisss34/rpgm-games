@@ -25,6 +25,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
@@ -169,6 +170,7 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
         webView.setFocusableInTouchMode(true);
 
         if (nodeShim) webView.addJavascriptInterface(new FsBridge(), "AndroidFS");
+        webView.addJavascriptInterface(new ImeBridge(), "AndroidIME");
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onConsoleMessage(ConsoleMessage m) {
@@ -216,10 +218,9 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
         if (path == null || path.isEmpty() || path.equals("/")) path = "/index.html";
         if (path.contains("..")) return status(403, "Forbidden");
         String assetPath = ASSET_ROOT + path;
-        if (nodeShim) {
-            if (path.equals("/__nodeshim.js")) return serveShim();
-            if (path.equals("/index.html")) return serveHtmlWithShim(assetPath);
-        }
+        if (nodeShim && path.equals("/__nodeshim.js")) return serveJs("nodeshim.js");
+        if (path.equals("/__ime.js")) return serveJs("ime.js");
+        if (path.equals("/index.html")) return serveHtmlWithShim(assetPath);
 
         InputStream in = openAsset(assetPath);
         if (in == null) return status(404, "Not Found");
@@ -292,10 +293,10 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
         return h;
     }
 
-    private WebResourceResponse serveShim() {
+    private WebResourceResponse serveJs(String name) {
         try {
             return new WebResourceResponse("text/javascript", "UTF-8", 200, "OK",
-                    plainHeaders(), getAssets().open("nodeshim.js"));
+                    plainHeaders(), getAssets().open(name));
         } catch (IOException e) {
             return status(404, "Not Found");
         }
@@ -306,7 +307,8 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
         if (in == null) return status(404, "Not Found");
         try {
             String html = new String(readAll(in), StandardCharsets.UTF_8);
-            String tag = "<script src=\"/__nodeshim.js\"></script>";
+            String tag = (nodeShim ? "<script src=\"/__nodeshim.js\"></script>" : "")
+                    + "<script src=\"/__ime.js\"></script>";
             Matcher m = Pattern.compile("<head(\\s[^>]*)?>", Pattern.CASE_INSENSITIVE).matcher(html);
             if (m.find()) {
                 html = html.substring(0, m.end()) + tag + html.substring(m.end());
@@ -331,6 +333,27 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
         int n;
         while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
         return bo.toByteArray();
+    }
+
+    /** Jembatan keyboard untuk ime.js. */
+    private final class ImeBridge {
+        @JavascriptInterface
+        public void show() {
+            runOnUiThread(() -> {
+                webView.requestFocus();
+                InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+                if (imm != null) imm.showSoftInput(webView, InputMethodManager.SHOW_IMPLICIT);
+            });
+        }
+
+        @JavascriptInterface
+        public void hide() {
+            runOnUiThread(() -> {
+                InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+                if (imm != null) imm.hideSoftInputFromWindow(webView.getWindowToken(), 0);
+                applyImmersive();
+            });
+        }
     }
 
     /** Jembatan fs untuk nodeshim.js: baca aset game, tulis ke penyimpanan app (files/nodefs). */
