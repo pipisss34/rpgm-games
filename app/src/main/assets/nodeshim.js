@@ -669,4 +669,9 @@
   requireFn.resolve = function (n) { return resolveFile(path.resolve('/', n)) || n; };
   requireFn.main = proc.mainModule;
   global.require = requireFn;
+  // NW.js menyediakan `module` global; `exports` sengaja TIDAK dibuat supaya pola UMD
+  // (typeof exports === 'object' && typeof module !== 'undefined') tetap memilih cabang browser.
+  if (typeof global.module === 'undefined') {
+    global.module = { id: '.', filename: '/index.html', exports: {}, loaded: true, children: [], paths: [], parent: null };
+  }
 })(typeof window !== 'undefined' ? window : this);
