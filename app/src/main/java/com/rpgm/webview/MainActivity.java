@@ -15,6 +15,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.text.Editable;
+import android.text.InputFilter;
 import android.text.InputType;
 import android.text.TextWatcher;
 import android.util.Base64;
@@ -335,24 +336,56 @@ public class MainActivity extends Activity implements VirtualPad.Listener {
         return bo.toByteArray();
     }
 
-    /** Jembatan keyboard untuk ime.js. */
+    /** Jembatan input teks untuk ime.js: dialog native dengan keyboard Android. */
     private final class ImeBridge {
         @JavascriptInterface
-        public void show() {
+        public void edit(String init, int max, String hint) {
+            final String start = init == null ? "" : init;
+            final String title = (hint == null || hint.isEmpty()) ? "Masukkan teks" : hint;
+            final int limit = max;
             runOnUiThread(() -> {
-                webView.requestFocus();
-                InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-                if (imm != null) imm.showSoftInput(webView, InputMethodManager.SHOW_IMPLICIT);
+                final EditText et = new EditText(MainActivity.this);
+                et.setText(start);
+                et.setSelection(start.length());
+                et.setSingleLine(true);
+                et.setImeOptions(EditorInfo.IME_FLAG_NO_EXTRACT_UI | EditorInfo.IME_ACTION_DONE);
+                if (limit > 0) et.setFilters(new InputFilter[]{new InputFilter.LengthFilter(limit)});
+                final boolean[] sent = {false};
+                final AlertDialog dlg = new AlertDialog.Builder(MainActivity.this)
+                        .setTitle(title)
+                        .setView(et)
+                        .setPositiveButton("OK", (d, w) -> deliver(sent, et.getText().toString()))
+                        .setNegativeButton("Batal", (d, w) -> deliver(sent, null))
+                        .create();
+                dlg.setOnCancelListener(d -> deliver(sent, null));
+                dlg.setOnDismissListener(d -> {
+                    deliver(sent, null);
+                    applyImmersive();
+                    webView.requestFocus();
+                });
+                et.setOnEditorActionListener((v, action, ev) -> {
+                    if (action == EditorInfo.IME_ACTION_DONE) {
+                        deliver(sent, et.getText().toString());
+                        dlg.dismiss();
+                        return true;
+                    }
+                    return false;
+                });
+                if (dlg.getWindow() != null) {
+                    dlg.getWindow().setSoftInputMode(
+                            WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE
+                                    | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN);
+                }
+                dlg.show();
+                et.requestFocus();
             });
         }
 
-        @JavascriptInterface
-        public void hide() {
-            runOnUiThread(() -> {
-                InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-                if (imm != null) imm.hideSoftInputFromWindow(webView.getWindowToken(), 0);
-                applyImmersive();
-            });
+        private void deliver(boolean[] sent, String text) {
+            if (sent[0]) return;
+            sent[0] = true;
+            String arg = text == null ? "null" : JSONObject.quote(text);
+            webView.evaluateJavascript("window.__imeResult&&window.__imeResult(" + arg + ")", null);
         }
     }
 
